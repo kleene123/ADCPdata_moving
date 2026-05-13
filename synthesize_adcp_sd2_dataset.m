@@ -53,47 +53,20 @@ end
 comp.kx = comp.k .* cosd(comp.theta);
 comp.ky = comp.k .* sind(comp.theta);
 
-%% 4) 4斜束几何
-[beam_vec, bin_pos] = make_4beam_geometry(cfg);
+%% 4) 4斜束几何（机体系）
+[beam_vec_body, bin_offset] = make_4beam_geometry(cfg);
 
-
-% --- AUV motion (MVP: horizontal constant velocity, no attitude) ---
-if ~isfield(cfg,'platform_mode') || isempty(cfg.platform_mode)
-    cfg.platform_mode = 'fixed';
-end
-
-vx = 0; vy = 0; vz = 0;  % vz 固定为 0（你要求先不加垂向）
-if strcmpi(cfg.platform_mode, 'auv_const_vel')
-    if ~isfield(cfg,'auv_speed') || isempty(cfg.auv_speed)
-        % 合理 AUV 速度范围（可改）：0.5~2.0 m/s
-        cfg.auv_speed = 0.5 + (2.0-0.5)*rand();
-    end
-    if ~isfield(cfg,'auv_dir_deg')
-        cfg.auv_dir_deg = []; % 允许随机
-    end
-
-    [vx, vy, dir_deg] = sample_auv_constant_velocity(cfg.auv_speed, cfg.auv_dir_deg);
-    cfg.auv_dir_deg = dir_deg; % 记录下来，便于复现/存档
-end
-
-% 统一回填：把“最终真实使用的平台运动”写入 cfg，确保会进入 .mat
-cfg.auv_vx = vx;
-cfg.auv_vy = vy;
-cfg.auv_vz = vz;
-if ~isfield(cfg,'auv_speed') || isempty(cfg.auv_speed)
-    cfg.auv_speed = hypot(vx, vy); % fixed 模式下为 0
-end
+%% 4b) 平台运动（平动+姿态+纵荡）
+[platform, cfg] = build_platform_motion(cfg);
 
 %% 5) 第5束：合成 eta(t)，缩放 comp.a 使 Hs 匹配 cfg.Hs，然后计算 Hs_ts
 Nt = numel(cfg.t);
-x0 = cfg.adcp_xy(1);
-y0 = cfg.adcp_xy(2);
 
 eta_ts = zeros(1,Nt);
 for it = 1:Nt
     tt = cfg.t(it);
-    xt = x0 + vx*tt;
-    yt = y0 + vy*tt;
+    xt = platform.x(it);
+    yt = platform.y(it);
     eta_ts(it) = surface_elevation_at_point(comp, xt, yt, tt);
 end
 
@@ -111,8 +84,8 @@ comp.a = comp.a * scale;
 eta_ts = zeros(1,Nt);
 for it = 1:Nt
     tt = cfg.t(it);
-    xt = x0 + vx*tt;
-    yt = y0 + vy*tt;
+    xt = platform.x(it);
+    yt = platform.y(it);
     eta_ts(it) = surface_elevation_at_point(comp, xt, yt, tt);
 end
 
@@ -120,8 +93,8 @@ fs = 1/median(diff(cfg.t));
 Hs_ts = hs_welch_realtime(eta_ts, fs, cfg.Hs_window_sec, cfg.Hs_update_sec, cfg.Hs_fmin, cfg.Hs_fmax);
 
 %% 6) 合成速度并投影（仅4束）
-nB = size(bin_pos,1);
-nZ = size(bin_pos,2);
+nB = size(bin_offset,1);
+nZ = size(bin_offset,2);
 
 radial4 = zeros(nB, nZ, Nt, 'single');
 
@@ -137,14 +110,19 @@ for it = 1:Nt
         fprintf('t step %d/%d (t=%.1fs)\n', it, Nt, cfg.t(it));
     end
     tt = cfg.t(it);
+    R = rpy_to_rotmat(platform.roll_deg(it), platform.pitch_deg(it), platform.yaw_deg(it));
+    beam_vec = (R * beam_vec_body')';
+    pos = [platform.x(it), platform.y(it), platform.z(it)];
+    vplat = [platform.vx(it), platform.vy(it), platform.vz(it)];
 
     % 一阶速度
     U1 = zeros(nB, nZ); V1 = zeros(nB, nZ); W1 = zeros(nB, nZ);
     for b = 1:nB
         for iz = 1:nZ
-            x = bin_pos(b,iz,1) + vx*tt;
-            y = bin_pos(b,iz,2) + vy*tt;
-            z = bin_pos(b,iz,3);   % vz=0，所以不动
+            offset = R * squeeze(bin_offset(b,iz,:));
+            x = pos(1) + offset(1);
+            y = pos(2) + offset(2);
+            z = pos(3) + offset(3);
             [u1,v1,w1] = linear_velocity_at_point(comp, x, y, z, tt, cfg.h, g);
             U1(b,iz) = u1; V1(b,iz) = v1; W1(b,iz) = w1;
         end
@@ -155,9 +133,10 @@ for it = 1:Nt
     if use_sd2
         for b = 1:nB
             for iz = 1:nZ
-                x = bin_pos(b,iz,1) + vx*tt;
-                y = bin_pos(b,iz,2) + vy*tt;
-                z = bin_pos(b,iz,3);
+                offset = R * squeeze(bin_offset(b,iz,:));
+                x = pos(1) + offset(1);
+                y = pos(2) + offset(2);
+                z = pos(3) + offset(3);
                 [u2,v2,w2] = sd2_velocity_at_point(comp, pair, x, y, z, tt, cfg.h, g, cfg.sd2);
                 U2(b,iz) = u2; V2(b,iz) = v2; W2(b,iz) = w2;
             end
@@ -171,7 +150,7 @@ for it = 1:Nt
 
     for b = 1:nB
         bv = beam_vec(b,:);
-        vproj = bv(1)*vx + bv(2)*vy + bv(3)*vz; % 这里 vz=0
+        vproj = dot(bv, vplat);
         radial4(b,:,it) = single( ...
             bv(1).*U(b,:) + bv(2).*V(b,:) + bv(3).*W(b,:) - vproj );
     end
@@ -189,16 +168,164 @@ out.meta.cfg  = cfg;
 out.meta.platform = struct();
 out.meta.platform.mode = cfg.platform_mode;
 
-% 水平常量速度（MVP）
-out.meta.platform.vx = cfg.auv_vx;
-out.meta.platform.vy = cfg.auv_vy;
-out.meta.platform.vz = cfg.auv_vz;          % 现在固定 0
-out.meta.platform.speed_mps = hypot(cfg.auv_vx, cfg.auv_vy);
+out.meta.platform.t = platform.t;
+out.meta.platform.x = platform.x;
+out.meta.platform.y = platform.y;
+out.meta.platform.z = platform.z;
+out.meta.platform.vx = platform.vx;
+out.meta.platform.vy = platform.vy;
+out.meta.platform.vz = platform.vz;
+out.meta.platform.speed_mps = hypot(platform.vx, platform.vy);
+out.meta.platform.roll_deg  = platform.roll_deg;
+out.meta.platform.pitch_deg = platform.pitch_deg;
+out.meta.platform.yaw_deg   = platform.yaw_deg;
+out.meta.platform.params    = platform.params;
+end
 
-% 方向（如果有）
-if isfield(cfg,'auv_dir_deg') && ~isempty(cfg.auv_dir_deg)
-    out.meta.platform.dir_deg = cfg.auv_dir_deg;
+function [platform, cfg] = build_platform_motion(cfg)
+if ~isfield(cfg,'platform_mode') || isempty(cfg.platform_mode)
+    cfg.platform_mode = 'fixed';
+end
+if ~isfield(cfg,'platform') || isempty(cfg.platform)
+    cfg.platform = struct();
+end
+
+t = cfg.t(:)';
+Nt = numel(t);
+x0 = cfg.adcp_xy(1);
+y0 = cfg.adcp_xy(2);
+z0 = cfg.adcp_z0;
+
+params = cfg.platform;
+
+switch lower(cfg.platform_mode)
+    case 'fixed'
+        vx0 = 0; vy0 = 0; vz_vec = zeros(1,Nt);
+        x = x0 * ones(1,Nt);
+        y = y0 * ones(1,Nt);
+        z = z0 * ones(1,Nt);
+        roll = zeros(1,Nt);
+        pitch = zeros(1,Nt);
+        yaw = zeros(1,Nt);
+        params.speed_mps = 0;
+        params.dir_deg = NaN;
+
+    case 'auv_const_vel'
+        if ~isfield(cfg,'auv_speed') || isempty(cfg.auv_speed)
+            cfg.auv_speed = 0.5 + (2.0-0.5)*rand();
+        end
+        if ~isfield(cfg,'auv_dir_deg')
+            cfg.auv_dir_deg = [];
+        end
+        [vx0, vy0, dir_deg] = sample_auv_constant_velocity(cfg.auv_speed, cfg.auv_dir_deg);
+        cfg.auv_dir_deg = dir_deg;
+        params.speed_mps = cfg.auv_speed;
+        params.dir_deg = dir_deg;
+
+        x = x0 + vx0 * t;
+        y = y0 + vy0 * t;
+        z = z0 * ones(1,Nt);
+        vz_vec = zeros(1,Nt);
+        roll = zeros(1,Nt);
+        pitch = zeros(1,Nt);
+        yaw = zeros(1,Nt);
+
+    case 'moving_full'
+        if ~isfield(params,'speed_mps') || isempty(params.speed_mps)
+            if isfield(cfg,'auv_speed') && ~isempty(cfg.auv_speed)
+                params.speed_mps = cfg.auv_speed;
+            else
+                params.speed_mps = 0.5 + (2.0-0.5)*rand();
+            end
+        end
+        if ~isfield(params,'dir_deg') || isempty(params.dir_deg)
+            if isfield(cfg,'auv_dir_deg') && ~isempty(cfg.auv_dir_deg)
+                params.dir_deg = cfg.auv_dir_deg;
+            else
+                params.dir_deg = 360*rand();
+            end
+        end
+
+        [vx0, vy0, dir_deg] = sample_auv_constant_velocity(params.speed_mps, params.dir_deg);
+        params.dir_deg = dir_deg;
+
+        params.yaw0_deg = get_or_default(params, 'yaw0_deg', dir_deg);
+        params.yaw_rate_deg_s = get_or_default(params, 'yaw_rate_deg_s', 0);
+        params.yaw_amp_deg = get_or_default(params, 'yaw_amp_deg', 5);
+        params.yaw_period_sec = get_or_default(params, 'yaw_period_sec', 60);
+        params.yaw_phase_deg = get_or_default(params, 'yaw_phase_deg', 360*rand());
+
+        params.roll_amp_deg = get_or_default(params, 'roll_amp_deg', 3);
+        params.roll_period_sec = get_or_default(params, 'roll_period_sec', 12);
+        params.roll_phase_deg = get_or_default(params, 'roll_phase_deg', 360*rand());
+
+        params.pitch_amp_deg = get_or_default(params, 'pitch_amp_deg', 2);
+        params.pitch_period_sec = get_or_default(params, 'pitch_period_sec', 10);
+        params.pitch_phase_deg = get_or_default(params, 'pitch_phase_deg', 360*rand());
+
+        params.heave_amp_m = get_or_default(params, 'heave_amp_m', 0.3);
+        params.heave_period_sec = get_or_default(params, 'heave_period_sec', 8);
+        params.heave_phase_deg = get_or_default(params, 'heave_phase_deg', 360*rand());
+
+        x = x0 + vx0 * t;
+        y = y0 + vy0 * t;
+
+        heave = sinusoid_series(t, params.heave_amp_m, params.heave_period_sec, params.heave_phase_deg);
+        z = z0 + heave;
+        vz_vec = sinusoid_derivative(t, params.heave_amp_m, params.heave_period_sec, params.heave_phase_deg);
+
+        roll  = sinusoid_series(t, params.roll_amp_deg, params.roll_period_sec, params.roll_phase_deg);
+        pitch = sinusoid_series(t, params.pitch_amp_deg, params.pitch_period_sec, params.pitch_phase_deg);
+        yaw = params.yaw0_deg + params.yaw_rate_deg_s * t + ...
+            sinusoid_series(t, params.yaw_amp_deg, params.yaw_period_sec, params.yaw_phase_deg);
+
+    otherwise
+        error('Unknown platform_mode: %s', cfg.platform_mode);
+end
+
+platform = struct();
+platform.t = t;
+platform.x = x;
+platform.y = y;
+platform.z = z;
+platform.vx = vx0 * ones(1,Nt);
+platform.vy = vy0 * ones(1,Nt);
+platform.vz = vz_vec;
+platform.roll_deg = roll;
+platform.pitch_deg = pitch;
+platform.yaw_deg = yaw;
+platform.params = params;
+
+cfg.platform = params;
+cfg.auv_vx = vx0;
+cfg.auv_vy = vy0;
+cfg.auv_vz = mean(vz_vec);
+cfg.auv_speed = hypot(vx0, vy0);
+cfg.auv_dir_deg = params.dir_deg;
+end
+
+function val = get_or_default(s, field, defaultVal)
+if isfield(s, field) && ~isempty(s.(field))
+    val = s.(field);
 else
-    out.meta.platform.dir_deg = NaN;
+    val = defaultVal;
+end
+end
+
+function y = sinusoid_series(t, amp, period, phase_deg)
+if amp == 0 || period <= 0
+    y = zeros(size(t));
+else
+    phase = deg2rad(phase_deg);
+    y = amp * sin(2*pi*t/period + phase);
+end
+end
+
+function y = sinusoid_derivative(t, amp, period, phase_deg)
+if amp == 0 || period <= 0
+    y = zeros(size(t));
+else
+    phase = deg2rad(phase_deg);
+    y = amp * (2*pi/period) * cos(2*pi*t/period + phase);
 end
 end
