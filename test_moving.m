@@ -45,7 +45,7 @@ end
 end
 
 table((1:4)', pred_mean, meas, meas-pred_mean, ...
-    'VariableNames', {'beam','pred_bias','meas_mean','差'})
+    'VariableNames', {'beam','pred_bias','meas_mean','diff'})
 
 function v = get_field_or_default(s, field, defaultVal)
 if isfield(s, field) && ~isempty(s.(field))

@@ -200,7 +200,7 @@ params = cfg.platform;
 
 switch lower(cfg.platform_mode)
     case 'fixed'
-        vx0 = 0; vy0 = 0; vz = zeros(1,Nt);
+        vx0 = 0; vy0 = 0; vz_vec = zeros(1,Nt);
         x = x0 * ones(1,Nt);
         y = y0 * ones(1,Nt);
         z = z0 * ones(1,Nt);
@@ -225,7 +225,7 @@ switch lower(cfg.platform_mode)
         x = x0 + vx0 * t;
         y = y0 + vy0 * t;
         z = z0 * ones(1,Nt);
-        vz = zeros(1,Nt);
+        vz_vec = zeros(1,Nt);
         roll = zeros(1,Nt);
         pitch = zeros(1,Nt);
         yaw = zeros(1,Nt);
@@ -272,7 +272,7 @@ switch lower(cfg.platform_mode)
 
         heave = sinusoid_series(t, params.heave_amp_m, params.heave_period_sec, params.heave_phase_deg);
         z = z0 + heave;
-        vz = sinusoid_derivative(t, params.heave_amp_m, params.heave_period_sec, params.heave_phase_deg);
+        vz_vec = sinusoid_derivative(t, params.heave_amp_m, params.heave_period_sec, params.heave_phase_deg);
 
         roll  = sinusoid_series(t, params.roll_amp_deg, params.roll_period_sec, params.roll_phase_deg);
         pitch = sinusoid_series(t, params.pitch_amp_deg, params.pitch_period_sec, params.pitch_phase_deg);
@@ -283,10 +283,6 @@ switch lower(cfg.platform_mode)
         error('Unknown platform_mode: %s', cfg.platform_mode);
 end
 
-if ~isfield(params,'dir_deg') || isempty(params.dir_deg)
-    params.dir_deg = NaN;
-end
-
 platform = struct();
 platform.t = t;
 platform.x = x;
@@ -294,7 +290,7 @@ platform.y = y;
 platform.z = z;
 platform.vx = vx0 * ones(1,Nt);
 platform.vy = vy0 * ones(1,Nt);
-platform.vz = vz;
+platform.vz = vz_vec;
 platform.roll_deg = roll;
 platform.pitch_deg = pitch;
 platform.yaw_deg = yaw;
@@ -303,7 +299,7 @@ platform.params = params;
 cfg.platform = params;
 cfg.auv_vx = vx0;
 cfg.auv_vy = vy0;
-cfg.auv_vz = mean(vz);
+cfg.auv_vz = mean(vz_vec);
 cfg.auv_speed = hypot(vx0, vy0);
 cfg.auv_dir_deg = params.dir_deg;
 end
