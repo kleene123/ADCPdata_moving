@@ -134,15 +134,33 @@ parfor k = 1:N
 
     cfg = groups{g};
     cfg.phase_seed = 1000000*g + r;
+    cfg.platform_mode = 'moving_full';
+    cfg.platform = struct();
+
+    % 平动：速度与航向
+    cfg.platform.speed_mps = 0.5 + (2.0-0.5)*rand();
+    cfg.platform.dir_deg = 360*rand();
+
+    % 姿态：滚/俯/偏航
+    cfg.platform.roll_amp_deg  = 1 + 4*rand();
+    cfg.platform.roll_period_sec = 8 + 8*rand();
+    cfg.platform.roll_phase_deg = 360*rand();
+
+    cfg.platform.pitch_amp_deg = 1 + 3*rand();
+    cfg.platform.pitch_period_sec = 8 + 8*rand();
+    cfg.platform.pitch_phase_deg = 360*rand();
+
+    cfg.platform.yaw_rate_deg_s = -3 + 6*rand();
+    cfg.platform.yaw_amp_deg = 5 + 10*rand();
+    cfg.platform.yaw_period_sec = 40 + 40*rand();
+    cfg.platform.yaw_phase_deg = 360*rand();
+
+    % 纵荡：升沉
+    cfg.platform.heave_amp_m = 0.1 + 0.4*rand();
+    cfg.platform.heave_period_sec = 6 + 6*rand();
+    cfg.platform.heave_phase_deg = 360*rand();
 
     out = synthesize_adcp_sd2_dataset(cfg);
-    cfg.platform_mode = 'auv_const_vel';
-
-    % 合理速度范围：0.5~2.0 m/s（你可以按需要调大/调小）
-    cfg.auv_speed = 0.5 + (2.0-0.5)*rand();
-
-    % 随机水平航向（如果你想固定某个方向就给具体角度）
-    cfg.auv_dir_deg = 360*rand();
 
     [S2, f2, d2] = downsample_directional_spectrum_energy_conserving( ...
         out.label.S, out.label.freq, out.label.dir, freq2, dir2);
