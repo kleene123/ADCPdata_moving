@@ -467,6 +467,9 @@ end
 function [cfg, info] = enforce_bin_depth_constraints(cfg)
 surface_margin_m = get_or_default(cfg, 'surface_margin_m', 0.5);
 z0 = cfg.adcp_z0;
+if cfg.beam_angle <= 0 || cfg.beam_angle >= 85
+    error('cfg.beam_angle must be in (0, 85) deg for stable bin-depth constraints.');
+end
 
 if z0 >= 0
     error('cfg.adcp_z0 must be negative (underwater), got %.3f m', z0);

@@ -47,7 +47,8 @@ rpy_max_abs = max(abs([roll; pitch; yaw]));
 
 dvx = [0; diff(vx)] / dt;
 dvy = [0; diff(vy)] / dt;
-drift_smoothness_metric = rms([dvx; dvy]) / max(rms([vx; vy]), eps);
+vel_rms = rms([vx; vy]);
+drift_smoothness_metric = rms([dvx; dvy]) / max(vel_rms, 1e-4);
 
 stokes_ok = true;
 stokes_dir_err_deg = NaN;
