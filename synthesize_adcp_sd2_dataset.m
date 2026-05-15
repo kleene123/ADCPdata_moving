@@ -220,19 +220,24 @@ switch lower(cfg.platform_mode)
         if isempty(params.current_dir_deg)
             params.current_dir_deg = 360*rand();
         end
-        current_speed = max(0, params.current_speed_mean_mps + params.current_speed_std_mps*randn());
+        current_speed = params.current_speed_mean_mps + params.current_speed_std_mps*randn();
+        while current_speed < 0
+            current_speed = params.current_speed_mean_mps + params.current_speed_std_mps*randn();
+        end
         current_vx = current_speed * cosd(params.current_dir_deg);
         current_vy = current_speed * sind(params.current_dir_deg);
 
         if params.include_stokes && isfield(cfg,'wave_drift') && isstruct(cfg.wave_drift)
             stokes_speed = params.stokes_scale * cfg.wave_drift.stokes_speed_mps;
             stokes_dir_deg = cfg.wave_drift.dom_dir_deg;
+            stokes_vx = stokes_speed * cosd(stokes_dir_deg);
+            stokes_vy = stokes_speed * sind(stokes_dir_deg);
         else
             stokes_speed = 0;
             stokes_dir_deg = NaN;
+            stokes_vx = 0;
+            stokes_vy = 0;
         end
-        stokes_vx = stokes_speed * cosd(stokes_dir_deg);
-        stokes_vy = stokes_speed * sind(stokes_dir_deg);
 
         dt = median(diff(t));
         tau = max(params.drift_corr_time_sec, dt);
@@ -423,7 +428,7 @@ function wave_drift = infer_wave_drift_from_spectrum(cfg, fgrid, thgrid, Sfd, g)
 df = abs(fgrid(2)-fgrid(1));
 dd_rad = abs(thgrid(2)-thgrid(1))*pi/180;
 
-Sf = sum(Sfd, 2);                       % 频率方向积分前的频谱切片
+Sf = sum(Sfd, 2);                       % Frequency spectral slice after directional integration
 [~, ifp] = max(Sf);
 peak_freq_hz = fgrid(ifp);
 peak_period_sec = 1 / peak_freq_hz;
@@ -435,7 +440,11 @@ zref = cfg.adcp_z0;
 omega_p = 2*pi*peak_freq_hz;
 kp = solve_dispersion(omega_p, cfg.h, g);
 
-a_peak = sqrt(max(2*Sfd(ifp,ith)*df*dd_rad, 0));
+s_peak = Sfd(ifp,ith);
+if s_peak < -eps
+    error('Directional spectrum contains negative energy at dominant bin.');
+end
+a_peak = sqrt(2*max(s_peak,0)*df*dd_rad);
 stokes_speed = (a_peak^2) * omega_p * kp * exp(2*kp*zref);
 
 wave_drift = struct();
