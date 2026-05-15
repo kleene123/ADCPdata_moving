@@ -39,13 +39,13 @@ if ~exist(outTest,'dir'), mkdir(outTest); end
 
 %% ===== baseCfg & opts =====
 baseCfg = struct();
-baseCfg.h = 30;
+baseCfg.h = 80;
 baseCfg.t = 0:0.5:1200;
 baseCfg.beam_angle = 20;
 baseCfg.n_bins = 30;
 baseCfg.bin_size = 1.0;
 baseCfg.adcp_xy = [20,20];
-baseCfg.adcp_z0 = -28.5;
+baseCfg.adcp_z0 = -45;
 baseCfg.freq = 0.05:0.01:0.5;
 baseCfg.dir  = 0:5:355;
 baseCfg.Hs = 2.0; baseCfg.Tp = 8.0; baseCfg.gamma = 3.3;
@@ -134,31 +134,15 @@ parfor k = 1:N
 
     cfg = groups{g};
     cfg.phase_seed = 1000000*g + r;
-    cfg.platform_mode = 'moving_full';
+    cfg.platform_mode = 'passive_drift';
     cfg.platform = struct();
-
-    % 平动：速度与航向
-    cfg.platform.speed_mps = 0.5 + (2.0-0.5)*rand();
-    cfg.platform.dir_deg = 360*rand();
-
-    % 姿态：滚/俯/偏航
-    cfg.platform.roll_amp_deg  = 1 + 4*rand();
-    cfg.platform.roll_period_sec = 8 + 8*rand();
-    cfg.platform.roll_phase_deg = 360*rand();
-
-    cfg.platform.pitch_amp_deg = 1 + 3*rand();
-    cfg.platform.pitch_period_sec = 8 + 8*rand();
-    cfg.platform.pitch_phase_deg = 360*rand();
-
-    cfg.platform.yaw_rate_deg_s = -3 + 6*rand();
-    cfg.platform.yaw_amp_deg = 5 + 10*rand();
-    cfg.platform.yaw_period_sec = 40 + 40*rand();
-    cfg.platform.yaw_phase_deg = 360*rand();
-
-    % 纵荡：升沉
-    cfg.platform.heave_amp_m = 0.1 + 0.4*rand();
-    cfg.platform.heave_period_sec = 6 + 6*rand();
-    cfg.platform.heave_phase_deg = 360*rand();
+    cfg.platform.current_speed_mean_mps = 0.08 + 0.08*rand();
+    cfg.platform.current_speed_std_mps = 0.02 + 0.03*rand();
+    cfg.platform.current_dir_deg = [];
+    cfg.platform.drift_corr_time_sec = 120 + 240*rand();
+    cfg.platform.drift_rms_mps = 0.015 + 0.03*rand();
+    cfg.platform.include_stokes = true;
+    cfg.platform.stokes_scale = 0.5 + rand();
 
     out = synthesize_adcp_sd2_dataset(cfg);
 

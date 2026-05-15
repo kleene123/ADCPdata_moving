@@ -34,11 +34,18 @@ end
 
 g = 9.81;
 
+if ~isfield(cfg,'adcp_z0') || isempty(cfg.adcp_z0)
+    cfg.adcp_z0 = -45;
+end
+
 %% 1) 方向谱标签
 [fgrid, thgrid, Sfd] = make_directional_spectrum(cfg);
 out.label.freq = fgrid;
 out.label.dir  = thgrid;
 out.label.S    = Sfd;
+
+% 从已生成方向谱提取主频/主方向（用于被动漂流中的 Stokes 漂移）
+cfg.wave_drift = infer_wave_drift_from_spectrum(cfg, fgrid, thgrid, Sfd, g);
 
 %% 2) 采样线性成分（离散波成分）
 comp = sample_components_from_spectrum(fgrid, thgrid, Sfd, cfg);
@@ -54,9 +61,10 @@ comp.kx = comp.k .* cosd(comp.theta);
 comp.ky = comp.k .* sind(comp.theta);
 
 %% 4) 4斜束几何（机体系）
+[cfg, nbin_adjust] = enforce_bin_depth_constraints(cfg);
 [beam_vec_body, bin_offset] = make_4beam_geometry(cfg);
 
-%% 4b) 平台运动（平动+姿态+纵荡）
+%% 4b) 平台运动
 [platform, cfg] = build_platform_motion(cfg);
 
 %% 5) 第5束：合成 eta(t)，缩放 comp.a 使 Hs 匹配 cfg.Hs，然后计算 Hs_ts
@@ -180,11 +188,12 @@ out.meta.platform.roll_deg  = platform.roll_deg;
 out.meta.platform.pitch_deg = platform.pitch_deg;
 out.meta.platform.yaw_deg   = platform.yaw_deg;
 out.meta.platform.params    = platform.params;
+out.meta.platform.bin_adjust = nbin_adjust;
 end
 
 function [platform, cfg] = build_platform_motion(cfg)
 if ~isfield(cfg,'platform_mode') || isempty(cfg.platform_mode)
-    cfg.platform_mode = 'fixed';
+    cfg.platform_mode = 'passive_drift';
 end
 if ~isfield(cfg,'platform') || isempty(cfg.platform)
     cfg.platform = struct();
@@ -199,6 +208,75 @@ z0 = cfg.adcp_z0;
 params = cfg.platform;
 
 switch lower(cfg.platform_mode)
+    case 'passive_drift'
+        params.current_speed_mean_mps = get_or_default(params, 'current_speed_mean_mps', 0.12);
+        params.current_speed_std_mps = get_or_default(params, 'current_speed_std_mps', 0.04);
+        params.current_dir_deg = get_or_default(params, 'current_dir_deg', []);
+        params.drift_corr_time_sec = get_or_default(params, 'drift_corr_time_sec', 180);
+        params.drift_rms_mps = get_or_default(params, 'drift_rms_mps', 0.03);
+        params.include_stokes = get_or_default(params, 'include_stokes', true);
+        params.stokes_scale = get_or_default(params, 'stokes_scale', 1.0);
+
+        if isempty(params.current_dir_deg)
+            params.current_dir_deg = 360*rand();
+        end
+        current_speed = max(0, params.current_speed_mean_mps + params.current_speed_std_mps*randn());
+        current_vx = current_speed * cosd(params.current_dir_deg);
+        current_vy = current_speed * sind(params.current_dir_deg);
+
+        if params.include_stokes && isfield(cfg,'wave_drift') && isstruct(cfg.wave_drift)
+            stokes_speed = params.stokes_scale * cfg.wave_drift.stokes_speed_mps;
+            stokes_dir_deg = cfg.wave_drift.dom_dir_deg;
+        else
+            stokes_speed = 0;
+            stokes_dir_deg = NaN;
+        end
+        stokes_vx = stokes_speed * cosd(stokes_dir_deg);
+        stokes_vy = stokes_speed * sind(stokes_dir_deg);
+
+        dt = median(diff(t));
+        tau = max(params.drift_corr_time_sec, dt);
+        alpha = exp(-dt / tau);
+        sigma = params.drift_rms_mps * sqrt(1 - alpha^2);
+
+        ou_vx = zeros(1,Nt);
+        ou_vy = zeros(1,Nt);
+        for it = 2:Nt
+            ou_vx(it) = alpha * ou_vx(it-1) + sigma * randn();
+            ou_vy(it) = alpha * ou_vy(it-1) + sigma * randn();
+        end
+
+        vx = current_vx + stokes_vx + ou_vx;
+        vy = current_vy + stokes_vy + ou_vy;
+        vz_vec = zeros(1,Nt);
+
+        x = zeros(1,Nt); y = zeros(1,Nt);
+        x(1) = x0; y(1) = y0;
+        for it = 2:Nt
+            dti = t(it) - t(it-1);
+            x(it) = x(it-1) + 0.5*(vx(it) + vx(it-1))*dti;
+            y(it) = y(it-1) + 0.5*(vy(it) + vy(it-1))*dti;
+        end
+        z = z0 * ones(1,Nt);
+
+        roll = zeros(1,Nt);
+        pitch = zeros(1,Nt);
+        yaw = zeros(1,Nt);
+
+        params.current_speed_sampled_mps = current_speed;
+        params.current_vx_mps = current_vx;
+        params.current_vy_mps = current_vy;
+        params.stokes_speed_mps = stokes_speed;
+        params.stokes_dir_deg = stokes_dir_deg;
+        params.stokes_vx_mps = stokes_vx;
+        params.stokes_vy_mps = stokes_vy;
+        params.wave_peak_freq_hz = cfg.wave_drift.peak_freq_hz;
+        params.wave_peak_period_sec = cfg.wave_drift.peak_period_sec;
+        params.wave_dom_dir_deg = cfg.wave_drift.dom_dir_deg;
+
+        vx0 = mean(vx);
+        vy0 = mean(vy);
+
     case 'fixed'
         vx0 = 0; vy0 = 0; vz_vec = zeros(1,Nt);
         x = x0 * ones(1,Nt);
@@ -288,8 +366,13 @@ platform.t = t;
 platform.x = x;
 platform.y = y;
 platform.z = z;
-platform.vx = vx0 * ones(1,Nt);
-platform.vy = vy0 * ones(1,Nt);
+if exist('vx','var') && exist('vy','var')
+    platform.vx = vx;
+    platform.vy = vy;
+else
+    platform.vx = vx0 * ones(1,Nt);
+    platform.vy = vy0 * ones(1,Nt);
+end
 platform.vz = vz_vec;
 platform.roll_deg = roll;
 platform.pitch_deg = pitch;
@@ -301,7 +384,13 @@ cfg.auv_vx = vx0;
 cfg.auv_vy = vy0;
 cfg.auv_vz = mean(vz_vec);
 cfg.auv_speed = hypot(vx0, vy0);
-cfg.auv_dir_deg = params.dir_deg;
+if isfield(params,'dir_deg')
+    cfg.auv_dir_deg = params.dir_deg;
+elseif hypot(vx0,vy0) > 0
+    cfg.auv_dir_deg = mod(atan2d(vy0, vx0), 360);
+else
+    cfg.auv_dir_deg = NaN;
+end
 end
 
 function val = get_or_default(s, field, defaultVal)
@@ -328,4 +417,62 @@ else
     phase = deg2rad(phase_deg);
     y = amp * (2*pi/period) * cos(2*pi*t/period + phase);
 end
+end
+
+function wave_drift = infer_wave_drift_from_spectrum(cfg, fgrid, thgrid, Sfd, g)
+df = abs(fgrid(2)-fgrid(1));
+dd_rad = abs(thgrid(2)-thgrid(1))*pi/180;
+
+Sf = sum(Sfd, 2);                       % 频率方向积分前的频谱切片
+[~, ifp] = max(Sf);
+peak_freq_hz = fgrid(ifp);
+peak_period_sec = 1 / peak_freq_hz;
+
+[~, ith] = max(Sfd(ifp,:));
+dom_dir_deg = thgrid(ith);
+
+zref = cfg.adcp_z0;
+omega_p = 2*pi*peak_freq_hz;
+kp = solve_dispersion(omega_p, cfg.h, g);
+
+a_peak = sqrt(max(2*Sfd(ifp,ith)*df*dd_rad, 0));
+stokes_speed = (a_peak^2) * omega_p * kp * exp(2*kp*zref);
+
+wave_drift = struct();
+wave_drift.peak_freq_hz = peak_freq_hz;
+wave_drift.peak_period_sec = peak_period_sec;
+wave_drift.dom_dir_deg = dom_dir_deg;
+wave_drift.k_peak = kp;
+wave_drift.a_peak_m = a_peak;
+wave_drift.stokes_speed_mps = stokes_speed;
+end
+
+function [cfg, info] = enforce_bin_depth_constraints(cfg)
+surface_margin_m = 0.5;
+z0 = cfg.adcp_z0;
+
+if z0 >= 0
+    error('cfg.adcp_z0 must be negative (underwater), got %.3f', z0);
+end
+if cfg.h <= abs(z0)
+    error('cfg.h (%.3f m) must exceed |cfg.adcp_z0| (%.3f m).', cfg.h, abs(z0));
+end
+
+max_upward_range = (-z0 - surface_margin_m) / cosd(cfg.beam_angle);
+max_bins = floor(max_upward_range / cfg.bin_size);
+if max_bins < 1
+    error('No valid bins remain below surface with current adcp_z0/bin_size/beam_angle.');
+end
+
+info = struct();
+info.surface_margin_m = surface_margin_m;
+info.original_n_bins = cfg.n_bins;
+info.adjusted = false;
+
+if cfg.n_bins > max_bins
+    cfg.n_bins = max_bins;
+    info.adjusted = true;
+end
+info.applied_n_bins = cfg.n_bins;
+info.max_n_bins_allowed = max_bins;
 end
