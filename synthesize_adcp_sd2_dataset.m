@@ -1,13 +1,13 @@
 function out = synthesize_adcp_sd2_dataset(cfg)
 %SYNTHESIZE_ADCP_SD2_DATASET
-% 合成：方向谱标签 + （一阶+二阶）速度场在ADCP采样点 + 四波束投影 + 第5束Hs时间序列
+% 合成：方向谱标签 + （一阶+二阶）速度场在ADCP采样点 + 四波束投影 + 第5束相关海面时间序列
 %
 % 主要流程：
 %   1) 生成方向谱标签 S(f,theta)
 %   2) 从方向谱离散抽样波成分 comp（含随机相位）
 %   3) 求解色散关系得到 k，并分解得到 kx/ky
 %   4) 构建4束几何与采样bin坐标
-%   5) 合成表面升沉 eta(t)，并“缩放 comp.a”使该 realization 的 Hs 匹配 cfg.Hs
+%   5) 沿平台轨迹采样表面升沉 eta(t)，并“缩放 comp.a”使该 realization 的 Hs 匹配 cfg.Hs
 %      然后用 pwelch 实时估计 Hs_ts（短窗口热启动版本）
 %   6) 合成(线性 + 可选二阶)速度场，并投影到4束径向速度
 %
@@ -15,6 +15,11 @@ function out = synthesize_adcp_sd2_dataset(cfg)
 %   cfg.phase_seed : (int)  每个 realization 的随机种子（控制相位抽样等随机过程）
 %   cfg.verbose    : (bool) 是否打印进度/校准信息（parfor 生成时建议 false）
 %   cfg.use_sd2    : (bool) 是否启用二阶 SD2（二阶会导致 build_pairs 占用极大内存）
+%
+% 默认行为说明：
+%   - 若未提供 cfg.adcp_z0，则默认平台深度为 -45 m。
+%   - 若未提供 cfg.platform_mode，则默认 passive_drift（仅水平漂移；z/roll/pitch/yaw 置零）。
+%   - 当前 out.adcp.eta_ts 为沿平台轨迹采样的海面真值序列（未单独输出 range5）。
 %
 % 输出 out 结构：
 %   out.label.freq / dir / S
@@ -67,7 +72,7 @@ comp.ky = comp.k .* sind(comp.theta);
 %% 4b) 平台运动
 [platform, cfg] = build_platform_motion(cfg);
 
-%% 5) 第5束：合成 eta(t)，缩放 comp.a 使 Hs 匹配 cfg.Hs，然后计算 Hs_ts
+%% 5) 第5束相关量：沿平台轨迹的 eta(t)，缩放 comp.a 使 Hs 匹配 cfg.Hs，然后计算 Hs_ts
 Nt = numel(cfg.t);
 
 eta_ts = zeros(1,Nt);
@@ -151,7 +156,7 @@ for it = 1:Nt
         end
     end
 
-    % 投影为4束径向速度
+    % 投影为4束径向速度（减去平台沿波束方向速度 => 相对速度观测）
     U = U1 + U2;
     V = V1 + V2;
     W = W1 + W2;
