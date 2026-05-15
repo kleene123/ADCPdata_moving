@@ -220,9 +220,10 @@ switch lower(cfg.platform_mode)
         if isempty(params.current_dir_deg)
             params.current_dir_deg = 360*rand();
         end
+        max_speed_retry_attempts = 20;
         current_speed = params.current_speed_mean_mps + params.current_speed_std_mps*randn();
         ntry = 0;
-        while current_speed < 0 && ntry < 20
+        while current_speed < 0 && ntry < max_speed_retry_attempts
             current_speed = params.current_speed_mean_mps + params.current_speed_std_mps*randn();
             ntry = ntry + 1;
         end
@@ -446,7 +447,9 @@ omega_p = 2*pi*peak_freq_hz;
 kp = solve_dispersion(omega_p, cfg.h, g);
 
 s_peak = Sfd(ifp,ith);
-if s_peak < -eps
+s_ref = max(abs(Sfd(:)));
+neg_tol = max(1e-12 * s_ref, eps);
+if s_peak < -neg_tol
     error('Directional spectrum contains negative energy at dominant bin: s_peak=%.6e', s_peak);
 end
 a_peak = sqrt(2*max(s_peak,0)*df*dd_rad);
@@ -462,7 +465,7 @@ wave_drift.stokes_speed_mps = stokes_speed;
 end
 
 function [cfg, info] = enforce_bin_depth_constraints(cfg)
-surface_margin_m = 0.5;
+surface_margin_m = get_or_default(cfg, 'surface_margin_m', 0.5);
 z0 = cfg.adcp_z0;
 
 if z0 >= 0
