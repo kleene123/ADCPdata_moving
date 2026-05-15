@@ -47,7 +47,7 @@ rpy_max_abs = max(abs([roll; pitch; yaw]));
 
 dvx = [0; diff(vx)] / dt;
 dvy = [0; diff(vy)] / dt;
-accel_to_vel_ratio = rms([dvx; dvy]) / max(rms([vx; vy]), eps);
+drift_smoothness_metric = rms([dvx; dvy]) / max(rms([vx; vy]), eps);
 
 stokes_ok = true;
 stokes_dir_err_deg = NaN;
@@ -68,14 +68,14 @@ R.rpy_max_abs_deg = rpy_max_abs;
 R.speed_mean_mps = mean(speed);
 R.speed_rms_mps = rms(speed);
 R.speed_max_mps = max(speed);
-R.drift_smoothness_metric = accel_to_vel_ratio;
+R.drift_smoothness_metric = drift_smoothness_metric;
 R.stokes_dir_error_deg = stokes_dir_err_deg;
 R.flags = struct( ...
     'mode_passive_drift', strcmpi(meta.platform.mode, 'passive_drift'), ...
     'z_constant', z_const_err <= opts.z_tol_m, ...
     'rpy_zero', rpy_max_abs <= opts.rpy_tol_deg, ...
     'drift_speed_reasonable', max(speed) <= opts.drift_speed_max_mps, ...
-    'drift_low_frequency', accel_to_vel_ratio <= opts.lowfreq_ratio_max, ...
+    'drift_low_frequency', drift_smoothness_metric <= opts.lowfreq_ratio_max, ...
     'stokes_alignment_ok', stokes_ok);
 
 disp('=== Passive drift validation ===');

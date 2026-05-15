@@ -221,8 +221,13 @@ switch lower(cfg.platform_mode)
             params.current_dir_deg = 360*rand();
         end
         current_speed = params.current_speed_mean_mps + params.current_speed_std_mps*randn();
-        while current_speed < 0
+        ntry = 0;
+        while current_speed < 0 && ntry < 20
             current_speed = params.current_speed_mean_mps + params.current_speed_std_mps*randn();
+            ntry = ntry + 1;
+        end
+        if current_speed < 0
+            current_speed = 0;
         end
         current_vx = current_speed * cosd(params.current_dir_deg);
         current_vy = current_speed * sind(params.current_dir_deg);
@@ -428,7 +433,7 @@ function wave_drift = infer_wave_drift_from_spectrum(cfg, fgrid, thgrid, Sfd, g)
 df = abs(fgrid(2)-fgrid(1));
 dd_rad = abs(thgrid(2)-thgrid(1))*pi/180;
 
-Sf = sum(Sfd, 2);                       % Frequency spectral slice after directional integration
+Sf = sum(Sfd, 2);                       % Frequency spectrum integrated over directions
 [~, ifp] = max(Sf);
 peak_freq_hz = fgrid(ifp);
 peak_period_sec = 1 / peak_freq_hz;
@@ -442,7 +447,7 @@ kp = solve_dispersion(omega_p, cfg.h, g);
 
 s_peak = Sfd(ifp,ith);
 if s_peak < -eps
-    error('Directional spectrum contains negative energy at dominant bin.');
+    error('Directional spectrum contains negative energy at dominant bin: s_peak=%.6e', s_peak);
 end
 a_peak = sqrt(2*max(s_peak,0)*df*dd_rad);
 stokes_speed = (a_peak^2) * omega_p * kp * exp(2*kp*zref);
@@ -461,7 +466,7 @@ surface_margin_m = 0.5;
 z0 = cfg.adcp_z0;
 
 if z0 >= 0
-    error('cfg.adcp_z0 must be negative (underwater), got %.3f', z0);
+    error('cfg.adcp_z0 must be negative (underwater), got %.3f m', z0);
 end
 if cfg.h <= abs(z0)
     error('cfg.h (%.3f m) must exceed |cfg.adcp_z0| (%.3f m).', cfg.h, abs(z0));
